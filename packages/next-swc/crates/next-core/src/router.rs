@@ -32,7 +32,7 @@ use turbopack_ecmascript::{
 use turbopack_node::{
     evaluate::evaluate,
     execution_context::{ExecutionContext, ExecutionContextVc},
-    source_map::StructuredError,
+    source_map::{StructuredError, trace_stack},
 };
 
 use crate::{
@@ -108,7 +108,7 @@ enum RouterIncomingMessage {
     MiddlewareHeaders { data: MiddlewareHeadersResponse },
     MiddlewareBody { data: Vec<u8> },
     None,
-    Error(StructuredError),
+    Error { error: StructuredError },
 }
 
 #[turbo_tasks::value(eq = "manual", cell = "new", serialization = "none")]
@@ -120,13 +120,13 @@ pub struct MiddlewareResponse {
     pub body: Stream<Result<Bytes, SharedError>>,
 }
 
-#[derive(Debug)]
 #[turbo_tasks::value(eq = "manual", cell = "new", serialization = "none")]
+#[derive(Debug)]
 pub enum RouterResult {
     Rewrite(RewriteResponse),
     Middleware(MiddlewareResponse),
     None,
-    Error,
+    Error(String),
 }
 
 #[turbo_tasks::function]
@@ -375,16 +375,36 @@ async fn route_internal(
             JsonValueVc::cell(dir.to_string_lossy().into()),
         ],
         CompletionsVc::all(vec![next_config_changed, routes_changed]),
+        // true,
         /* debug */ false,
     )
     .await?;
 
     let mut read = result.read();
 
-    let Some(Ok(first)) = read.next().await else {
-        return Ok(RouterResult::Error.cell());
+    let first = match read.next().await {
+        Some(Ok(first)) => first,
+        Some(Err(e)) => {
+            return Ok(
+                RouterResult::Error(format!("received error from javascript stream: {}", e)).cell(),
+            )
+        }
+        None => {
+            return Ok(RouterResult::Error(
+                "no message received from javascript stream".to_string(),
+            )
+            .cell())
+        }
     };
-    let first: RouterIncomingMessage = parse_json_with_source_context(first.to_str()?)?;
+    let first: RouterIncomingMessage = parse_json_with_source_context(first.to_str()?)
+        .with_context(|| {
+            format!(
+                "parsing incoming message ({})",
+                first
+                    .to_str()
+                    .expect("this was already successfully converted")
+            )
+        })?;
 
     let (res, read) = match first {
         RouterIncomingMessage::Rewrite { data } => (RouterResult::Rewrite(data), Some(read)),
@@ -416,7 +436,23 @@ async fn route_internal(
         }
 
         RouterIncomingMessage::None => (RouterResult::None, Some(read)),
-        _ => (RouterResult::Error, Some(read)),
+        RouterIncomingMessage::Error { error } => {
+            bail!(
+                trace_stack(
+                    error,
+                    router_asset,
+                    chunking_context.output_root(),
+                    project_path
+                )
+                .await?
+            )
+        }
+        RouterIncomingMessage::MiddlewareBody { .. } => (
+            RouterResult::Error(
+                "unexpected incoming middleware body without middleware headers".to_string(),
+            ),
+            Some(read),
+        ),
     };
 
     // Middleware will naturally drain the full stream, but the rest only take a
