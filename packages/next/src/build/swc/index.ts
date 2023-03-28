@@ -243,15 +243,6 @@ async function loadWasm(importPath = '') {
         minifySync(src: string, options: any) {
           return bindings.minifySync(src.toString(), options)
         },
-        parse(src: string, options: any) {
-          return bindings?.parse
-            ? bindings.parse(src.toString(), options)
-            : Promise.resolve(bindings.parseSync(src.toString(), options))
-        },
-        parseSync(src: string, options: any) {
-          const astStr = bindings.parseSync(src.toString(), options)
-          return astStr
-        },
         getTargetTriple() {
           return undefined
         },
@@ -386,10 +377,6 @@ function loadNative(isCustomTurbopack = false) {
 
       minifySync(src: string, options: any) {
         return bindings.minifySync(toBuffer(src), toBuffer(options ?? {}))
-      },
-
-      parse(src: string, options: any) {
-        return bindings.parse(src, toBuffer(options ?? {}))
       },
 
       getTargetTriple: bindings.getTargetTriple,

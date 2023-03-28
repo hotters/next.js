@@ -44,7 +44,6 @@ use next_binding::swc::core::{
 
 pub mod mdx;
 pub mod minify;
-pub mod parse;
 pub mod transform;
 pub mod turbopack;
 pub mod turbotrace;
